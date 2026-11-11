@@ -54,7 +54,11 @@
       list.textContent = "Open the game from a Telegram chat to save scores.";
       return;
     }
-    await post("/score", { score: Math.floor(score) });
+    const saved = await post("/score", { score: Math.floor(score) });
+    if (!saved || !saved.ok) {
+      list.textContent = "Score not saved: " + ((saved && saved.error) || "no connection");
+      return;
+    }
     const r = await post("/scores");
     if (!r || !r.scores) return;
     r.scores.forEach(function (x) {

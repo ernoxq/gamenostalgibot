@@ -61,6 +61,12 @@ async function readCtx(env, body) {
   }
 }
 
+// An explicit Play button matters: without our own keyboard Telegram does not
+// tell the bot which inline message was pressed, so the score has nowhere to go.
+const playMarkup = (short) => ({
+  inline_keyboard: [[{ text: `Play ${GAMES[short]}!`, callback_game: {} }]],
+});
+
 const target = (c) => (c.i ? { inline_message_id: c.i } : { chat_id: c.c, message_id: c.m });
 
 async function onUpdate(env, origin, u) {
@@ -68,11 +74,16 @@ async function onUpdate(env, origin, u) {
     const q = (u.inline_query.query || "").trim().toLowerCase();
     const results = Object.entries(GAMES)
       .filter(([short, title]) => !q || short.includes(q) || title.toLowerCase().includes(q))
-      .map(([short]) => ({ type: "game", id: short, game_short_name: short }));
+      .map(([short]) => ({
+        type: "game",
+        id: short,
+        game_short_name: short,
+        reply_markup: playMarkup(short),
+      }));
     await tg(env, "answerInlineQuery", {
       inline_query_id: u.inline_query.id,
       results,
-      cache_time: 60,
+      cache_time: 5,
     });
     return;
   }
@@ -102,7 +113,11 @@ async function onUpdate(env, origin, u) {
   // /games (or /play) in a group where the bot is a member: post every game card there.
   if (u.message && /^\/(games|play)(@\w+)?(\s|$)/.test(u.message.text || "")) {
     for (const short of Object.keys(GAMES)) {
-      await tg(env, "sendGame", { chat_id: u.message.chat.id, game_short_name: short });
+      await tg(env, "sendGame", {
+        chat_id: u.message.chat.id,
+        game_short_name: short,
+        reply_markup: playMarkup(short),
+      });
     }
     return;
   }
@@ -142,7 +157,13 @@ export default {
         return json({ ok: false }, 400);
       }
       // Without `force`, Telegram keeps the best score and ignores lower ones.
+      if (!ctx.i && !ctx.m) {
+        return json({ ok: false, error: "Send a new game card to the chat and open the game from it." });
+      }
       const r = await tg(env, "setGameScore", { user_id: ctx.u, score, ...target(ctx) });
+      if (!r.ok && !/NOT_MODIFIED/.test(r.description || "")) {
+        return json({ ok: false, error: r.description || "Telegram refused the score" });
+      }
       return json({ ok: true, improved: !!r.ok });
     }
 
