@@ -5,3 +5,12 @@ compatibility_date = "2026-01-01"
 # Static game files. Anything not found here falls through to the worker.
 [assets]
 directory = "./public"
+
+# Our own scoreboard, one per game card. Created automatically on deploy.
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "Board"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Board"]

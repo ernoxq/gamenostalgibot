@@ -61,6 +61,12 @@
     }
     const r = await post("/scores");
     if (!r || !r.scores) return;
+    if (saved.card) {
+      const note = document.createElement("div");
+      note.style.cssText = "font-size:12px;opacity:.6;margin-bottom:8px";
+      note.textContent = "Card not updated: " + saved.card;
+      list.appendChild(note);
+    }
     r.scores.forEach(function (x) {
       const row = document.createElement("div");
       row.className = "go-row" + (x.me ? " me" : "");

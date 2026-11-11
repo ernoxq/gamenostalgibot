@@ -73,6 +73,45 @@ const playMarkup = (short) => ({
 
 const target = (c) => (c.i ? { inline_message_id: c.i } : { chat_id: c.c, message_id: c.m });
 
+const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const cardText = (top) =>
+  "<b>Top Players</b>\n" + top.map((x) => `${x.position}. ${esc(x.name)} \u2013 <b>${x.score}</b>`).join("\n");
+
+const rank = (scores) =>
+  Object.entries(scores)
+    .map(([u, v]) => ({ u: Number(u), name: v.n, score: v.s }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
+    .map((x, i) => ({ ...x, position: i + 1 }));
+
+// One scoreboard per game card.
+async function board(env, ctx, entry) {
+  const key = ctx.i || `${ctx.c}:${ctx.m}`;
+  const stub = env.BOARD.get(env.BOARD.idFromName(key));
+  const r = await stub.fetch("https://board/", entry ? { method: "POST", body: JSON.stringify(entry) } : {});
+  return r.json();
+}
+
+export class Board {
+  constructor(state) {
+    this.state = state;
+  }
+  async fetch(req) {
+    const scores = (await this.state.storage.get("scores")) || {};
+    let improved = false;
+    if (req.method === "POST") {
+      const { u, n, s } = await req.json();
+      const prev = scores[u];
+      improved = !prev || s > prev.s;
+      if (improved) scores[u] = { n, s };
+      else prev.n = n;
+      await this.state.storage.put("scores", scores);
+    }
+    return json({ improved, top: rank(scores) });
+  }
+}
+
 async function onUpdate(env, origin, u) {
   if (u.inline_query) {
     const q = (u.inline_query.query || "").trim().toLowerCase();
@@ -104,7 +143,7 @@ async function onUpdate(env, origin, u) {
       await tg(env, "answerCallbackQuery", { callback_query_id: cq.id });
       return;
     }
-    const ctx = { u: cq.from.id, g };
+    const ctx = { u: cq.from.id, g, n: String(cq.from.first_name || "Player").slice(0, 32) };
     if (cq.inline_message_id) ctx.i = cq.inline_message_id;
     else if (cq.message) {
       ctx.c = cq.message.chat.id;
@@ -165,45 +204,50 @@ export default {
       if (!ctx || !Number.isInteger(score) || score < 0 || score > 1e9) {
         return json({ ok: false }, 400);
       }
-      // Without `force`, Telegram keeps the best score and ignores lower ones.
       if (!ctx.i && !ctx.m) {
         return json({ ok: false, error: "Send a new game card to the chat and open the game from it." });
       }
-      const fine = (x) => x.ok || /NOT_MODIFIED/.test(x.description || "");
-      let r = await tg(env, "setGameScore", { user_id: ctx.u, score, ...target(ctx) });
-      if (!fine(r)) {
-        // Second try without touching the card: the score and the "scored" line
-        // can still go through when Telegram refuses to edit the message itself.
-        const r2 = await tg(env, "setGameScore", {
-          user_id: ctx.u, score, disable_edit_message: true, ...target(ctx),
-        });
-        if (fine(r2)) r = r2;
+
+      // First the native Telegram scoreboard. Where it works, Telegram updates the
+      // card itself and posts the "scored" line.
+      const native = await tg(env, "setGameScore", { user_id: ctx.u, score, ...target(ctx) });
+      if (native.ok || /NOT_MODIFIED/.test(native.description || "")) {
+        return json({ ok: true, improved: !!native.ok });
       }
-      if (!fine(r)) {
-        // Probe the same message two other ways, to tell a broken id from a broken score call.
-        const short = (x) => (x.ok ? "ok" : (x.description || "?").replace("Bad Request: ", ""));
-        const edit = await tg(env, "editMessageReplyMarkup", { ...target(ctx), reply_markup: playMarkup(ctx.g) });
-        const high = await tg(env, "getGameHighScores", { user_id: ctx.u, ...target(ctx) });
-        const where = ctx.i ? `inline ${ctx.i.length}` : `chat ${ctx.c}/${ctx.m}`;
-        return json({
-          ok: false,
-          error: `${short(r)} [${where}; edit: ${short(edit)}; scores: ${short(high)}]`,
+
+      // Telegram refused (it does for cards sent to private chats). Keep our own
+      // scoreboard for this card and write Top Players into the card ourselves.
+      if (!env.BOARD) return json({ ok: false, error: native.description || "score refused" });
+      const res = await board(env, ctx, { u: ctx.u, n: ctx.n || "Player", s: score });
+      let card = null;
+      if (res.improved) {
+        const edit = await tg(env, "editMessageText", {
+          ...target(ctx),
+          text: cardText(res.top),
+          parse_mode: "HTML",
+          reply_markup: playMarkup(ctx.g),
         });
+        if (!edit.ok && !/not modified/.test(edit.description || "")) card = edit.description || "edit failed";
       }
-      return json({ ok: true, improved: !!r.ok });
+      return json({ ok: true, improved: res.improved, card });
     }
 
     if (url.pathname === "/scores" && req.method === "POST") {
       const ctx = await readCtx(env, await req.json().catch(() => null));
       if (!ctx) return json({ ok: false }, 400);
       const r = await tg(env, "getGameHighScores", { user_id: ctx.u, ...target(ctx) });
-      const scores = (r.result || []).map((x) => ({
-        position: x.position,
-        name: x.user.first_name,
-        score: x.score,
-        me: x.user.id === ctx.u,
-      }));
-      return json({ ok: true, scores });
+      if (r.ok) {
+        const scores = r.result.map((x) => ({
+          position: x.position,
+          name: x.user.first_name,
+          score: x.score,
+          me: x.user.id === ctx.u,
+        }));
+        return json({ ok: true, scores });
+      }
+      if (!env.BOARD) return json({ ok: true, scores: [] });
+      const res = await board(env, ctx);
+      return json({ ok: true, scores: res.top.map((x) => ({ ...x, me: x.u === ctx.u })) });
     }
 
     // One-time: open /setup?key=<WEBHOOK_SECRET> in a browser after deploy.
