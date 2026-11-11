@@ -229,6 +229,15 @@ export default {
         });
         if (!edit.ok && !/not modified/.test(edit.description || "")) card = edit.description || "edit failed";
       }
+      // In a chat where the bot itself posted the card it can also announce the result.
+      if (res.improved && ctx.c) {
+        await tg(env, "sendMessage", {
+          chat_id: ctx.c,
+          text: `<b>${esc(ctx.n || "Player")}</b> scored ${score} in <b>${esc(GAMES[ctx.g])}</b>`,
+          parse_mode: "HTML",
+          disable_notification: true,
+        });
+      }
       return json({ ok: true, improved: res.improved, card });
     }
 
