@@ -169,9 +169,19 @@ export default {
       if (!ctx.i && !ctx.m) {
         return json({ ok: false, error: "Send a new game card to the chat and open the game from it." });
       }
-      const r = await tg(env, "setGameScore", { user_id: ctx.u, score, ...target(ctx) });
-      if (!r.ok && !/NOT_MODIFIED/.test(r.description || "")) {
-        return json({ ok: false, error: r.description || "Telegram refused the score" });
+      const fine = (x) => x.ok || /NOT_MODIFIED/.test(x.description || "");
+      let r = await tg(env, "setGameScore", { user_id: ctx.u, score, ...target(ctx) });
+      if (!fine(r)) {
+        // Second try without touching the card: the score and the "scored" line
+        // can still go through when Telegram refuses to edit the message itself.
+        const r2 = await tg(env, "setGameScore", {
+          user_id: ctx.u, score, disable_edit_message: true, ...target(ctx),
+        });
+        if (fine(r2)) r = r2;
+      }
+      if (!fine(r)) {
+        const where = ctx.i ? `inline id, ${ctx.i.length} chars` : `chat ${ctx.c}, message ${ctx.m}`;
+        return json({ ok: false, error: `${r.description || "Telegram refused the score"} (${where})` });
       }
       return json({ ok: true, improved: !!r.ok });
     }
