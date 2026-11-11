@@ -123,7 +123,7 @@ export default {
     const url = new URL(req.url);
 
     if (url.pathname === "/webhook" && req.method === "POST") {
-      if (req.headers.get("x-telegram-bot-api-secret-token") !== env.WEBHOOK_SECRET) {
+      if (req.headers.get("x-telegram-bot-api-secret-token") !== (env.WEBHOOK_SECRET || "").trim()) {
         return new Response("forbidden", { status: 403 });
       }
       try {
@@ -161,12 +161,19 @@ export default {
 
     // One-time: open /setup?key=<WEBHOOK_SECRET> in a browser after deploy.
     if (url.pathname === "/setup") {
-      if (url.searchParams.get("key") !== env.WEBHOOK_SECRET) {
-        return new Response("forbidden", { status: 403 });
+      const secret = (env.WEBHOOK_SECRET || "").trim();
+      const key = (url.searchParams.get("key") || "").trim();
+      if (!secret) return new Response("WEBHOOK_SECRET is not set in Cloudflare (Settings > Variables and Secrets)", { status: 403 });
+      if (!env.BOT_TOKEN) return new Response("BOT_TOKEN is not set in Cloudflare (Settings > Variables and Secrets)", { status: 403 });
+      if (key !== secret) {
+        return new Response(
+          `key does not match WEBHOOK_SECRET (key has ${key.length} characters, secret has ${secret.length})`,
+          { status: 403 },
+        );
       }
       const r = await tg(env, "setWebhook", {
         url: `${url.origin}/webhook`,
-        secret_token: env.WEBHOOK_SECRET,
+        secret_token: secret,
         allowed_updates: ["message", "inline_query", "callback_query"],
       });
       return json(r);
