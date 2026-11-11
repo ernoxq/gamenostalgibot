@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Blade Wheel</title>
+<style>
+  html,body{margin:0;height:100%;background:#1d1d1f;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="/common.js"></script>
+<script>
+// Tap to throw a blade into the spinning wheel. Hit another blade and it's over.
+// +1 per blade, +3 for hitting the star, new wheel when all blades are in.
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+let W, H, s, last = 0;
+const TAU = Math.PI * 2, GAP = 0.21, COLORS = ["#12b84a", "#ff7a1a", "#3aa0ff", "#e64980", "#b06bff", "#f2c400"];
+
+function fit() {
+  const r = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * r; cv.height = H * r;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  g.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener("resize", fit); fit();
+
+const rad = () => Math.min(W * 0.3, H * 0.19, 130);
+const cx = () => W / 2, cy = () => H * 0.33;
+const restY = () => H * 0.8;                 // tip of the blade waiting at the bottom
+const blade = () => rad() * 0.95;            // total blade length
+const norm = (a) => ((a % TAU) + TAU) % TAU;
+const apart = (a, b) => { const d = Math.abs(norm(a) - norm(b)); return Math.min(d, TAU - d); };
+
+function spin(stage, t) {
+  const fast = Math.min(3.7, 1.9 + stage * 0.22);
+  if (stage === 1) return 1.7;
+  if (stage === 2) return -2.2;
+  if (stage % 2) return fast * Math.cos(t * 0.85);                       // swings back and forth
+  return (stage % 4 ? 1 : -1) * fast * (0.6 + 0.4 * Math.sin(t * 1.4));  // speeds up and slows down
+}
+
+function newStage(n) {
+  s.stage = n; s.a = 0; s.st = 0; s.left = Math.min(10, 5 + n); s.total = s.left;
+  s.stuck = []; s.fly = null; s.next = 0; s.color = COLORS[(n - 1) % COLORS.length];
+  for (let i = 0; i < Math.min(4, n - 1); i++) {
+    for (let tries = 0; tries < 40; tries++) {
+      const a = Math.random() * TAU;
+      if (s.stuck.every((b) => apart(a, b) > 0.7)) { s.stuck.push(a); break; }
+    }
+  }
+  s.star = null;
+  for (let tries = 0; tries < 40; tries++) {
+    const a = Math.random() * TAU;
+    if (s.stuck.every((b) => apart(a, b) > 0.4)) { s.star = a; break; }
+  }
+}
+
+function reset() {
+  s = { score: 0, over: false, bits: [], drop: null, flash: 0, pop: 0 };
+  newStage(1);
+}
+
+function burst(x, y, color, n, speed) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, v = speed * (0.3 + Math.random() * 0.7);
+    s.bits.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: 2 + Math.random() * 5, life: 0.5 + Math.random() * 0.5, c: color });
+  }
+}
+
+addEventListener("pointerdown", () => {
+  if (!s || s.over || s.fly || s.next > 0 || s.left <= 0) return;
+  s.fly = { y: restY() };
+});
+
+function step(dt) {
+  for (const b of s.bits) { b.x += b.vx * dt; b.y += b.vy * dt; b.vy += 900 * dt; b.life -= dt; }
+  s.bits = s.bits.filter((b) => b.life > 0);
+  if (s.flash > 0) s.flash -= dt;
+  if (s.pop > 0) s.pop -= dt;
+  if (s.drop) { const d = s.drop; d.x += d.vx * dt; d.y += d.vy * dt; d.vy += 2600 * dt; d.rot += d.vr * dt; }
+  if (s.over) return;
+
+  if (s.next > 0) {                         // short pause between wheels
+    s.next -= dt;
+    if (s.next <= 0) newStage(s.stage + 1);
+    return;
+  }
+  s.st += dt;
+  s.a += spin(s.stage, s.st) * dt;
+
+  if (!s.fly) return;
+  s.fly.y -= 2300 * dt;
+  const rim = cy() + rad();
+  if (s.fly.y > rim - 10) return;
+
+  const at = norm(Math.PI / 2 - s.a);       // where on the wheel the blade lands
+  s.fly = null;
+  if (s.stuck.some((b) => apart(at, b) < GAP)) {
+    s.over = true;
+    s.drop = { x: cx(), y: rim + 6, vx: (Math.random() < 0.5 ? -1 : 1) * 260, vy: -500, rot: Math.PI / 2, vr: 14 };
+    burst(cx(), rim, "#ffffff", 10, 260);
+    setTimeout(() => gameOver(s.score, reset), 450);
+    return;
+  }
+  s.stuck.push(at); s.left--; s.score++; s.flash = 0.08;
+  burst(cx(), rim, s.color, 7, 220);
+  if (s.star !== null && apart(at, s.star) < 0.24) {
+    s.score += 3; s.pop = 0.7; s.star = null;
+    burst(cx(), rim, "#ffb703", 14, 320);
+  }
+  if (s.left === 0) {
+    burst(cx(), cy(), s.color, 46, 520);
+    s.next = 0.7;
+  }
+}
+
+// Blade drawn along +x, tip at the origin.
+function drawBlade(color) {
+  const L = blade(), h = L * 0.34;
+  g.fillStyle = "#cfd3d8";
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(L - h, -4.5); g.lineTo(L - h, 4.5); g.closePath(); g.fill();
+  g.fillStyle = "#9aa0a8";
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(L - h, 0); g.lineTo(L - h, 4.5); g.closePath(); g.fill();
+  g.fillStyle = "#e9ecef"; g.fillRect(L - h - 2, -8, 4, 16);
+  g.fillStyle = color;
+  g.beginPath();
+  if (g.roundRect) g.roundRect(L - h + 2, -6, h - 2, 12, 5); else g.rect(L - h + 2, -6, h - 2, 12);
+  g.fill();
+}
+
+function drawStar(x, y, r) {
+  g.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * 0.48 : r;
+    g.lineTo(x + Math.cos(a) * q, y + Math.sin(a) * q);
+  }
+  g.closePath(); g.fillStyle = "#ffb703"; g.fill();
+  g.strokeStyle = "#e08a00"; g.lineWidth = 2; g.stroke();
+}
+
+function draw() {
+  const R = rad(), X = cx(), Y = cy();
+  g.fillStyle = "#1d1d1f"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#232326";
+  g.beginPath(); g.arc(W * 0.1, H * 0.25, W * 0.6, 0, TAU); g.fill();
+  g.beginPath(); g.arc(W * 0.95, H * 0.8, W * 0.55, 0, TAU); g.fill();
+
+  const gone = s.next > 0;
+  if (!gone) {
+    // blades first, so the wheel covers their tips
+    for (const b of s.stuck) {
+      g.save(); g.translate(X, Y); g.rotate(b + s.a); g.translate(R - 12, 0); drawBlade(s.color); g.restore();
+    }
+    if (s.star !== null) {
+      const a = s.star + s.a;
+      drawStar(X + Math.cos(a) * (R + 20), Y + Math.sin(a) * (R + 20), 13);
+    }
+    g.save(); g.translate(X, Y); g.rotate(s.a);
+    g.fillStyle = s.flash > 0 ? "#ffffff" : s.color;
+    g.beginPath(); g.arc(0, 0, R, 0, TAU); g.fill();
+    g.fillStyle = "rgba(0,0,0,.13)";
+    for (let i = 0; i < 6; i += 2) {
+      g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, R, i * TAU / 6, (i + 1) * TAU / 6); g.fill();
+    }
+    g.fillStyle = "rgba(255,255,255,.18)";
+    g.beginPath(); g.arc(0, 0, R * 0.42, 0, TAU); g.fill();
+    g.fillStyle = "#1d1d1f";
+    g.beginPath(); g.arc(0, 0, R * 0.1, 0, TAU); g.fill();
+    g.restore();
+  }
+
+  for (const b of s.bits) {
+    g.globalAlpha = Math.min(1, b.life * 2); g.fillStyle = b.c;
+    g.beginPath(); g.arc(b.x, b.y, b.r, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1;
+
+  // the blade in flight, or the next one waiting
+  const tipY = s.fly ? s.fly.y : restY();
+  if (!s.over && !gone && (s.fly || s.left > 0)) {
+    g.save(); g.translate(X, tipY); g.rotate(Math.PI / 2); drawBlade(s.color); g.restore();
+  }
+  if (s.drop) {
+    g.save(); g.translate(s.drop.x, s.drop.y); g.rotate(s.drop.rot); drawBlade(s.color); g.restore();
+  }
+
+  // blades left
+  for (let i = 0; i < s.total; i++) {
+    g.save();
+    g.translate(22, H - 30 - i * 15); g.rotate(-0.5); g.scale(0.36, 0.36);
+    g.globalAlpha = i < s.left ? 1 : 0.2;
+    drawBlade(s.color);
+    g.restore();
+  }
+  g.globalAlpha = 1;
+
+  g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#ffffff";
+  g.font = "800 44px system-ui,sans-serif"; g.fillText(s.score, W / 2, 56);
+  g.font = "600 14px system-ui,sans-serif"; g.fillStyle = "rgba(255,255,255,.5)";
+  g.fillText("WHEEL " + s.stage, W / 2, 90);
+  if (s.pop > 0) {
+    g.globalAlpha = Math.min(1, s.pop * 2); g.fillStyle = "#ffb703";
+    g.font = "800 26px system-ui,sans-serif"; g.fillText("+3", W / 2, Y + R + 50 - (0.7 - s.pop) * 40);
+    g.globalAlpha = 1;
+  }
+  if (s.score === 0 && !s.fly && s.stage === 1) {
+    g.fillStyle = "rgba(255,255,255,.7)"; g.font = "600 16px system-ui,sans-serif";
+    g.fillText("Tap to throw", W / 2, H * 0.93);
+  }
+}
+
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  step(dt); draw();
+  requestAnimationFrame(frame);
+}
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

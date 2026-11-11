@@ -1,10 +1,14 @@
 // Telegram game bot: inline games with per-chat high scores.
 // Short names must match the ones registered in @BotFather via /newgame,
 // and each game lives in public/<short_name>/index.html.
-// Only list games that are already registered in BotFather: one unregistered
-// short name makes Telegram reject the whole inline list.
+// Order matters: register games in BotFather in this order. If Telegram rejects
+// the inline list (a short name is not registered yet), the bot retries with
+// fewer games from the end, so already registered ones keep working.
 const GAMES = {
   racer: "Grid Racer",
+  ski: "Snow Zigzag",
+  tiles: "Tile Dash",
+  knives: "Blade Wheel",
   // cannon: "Star Cannon",
   // runner: "Roof Runner",
 };
@@ -72,19 +76,24 @@ const target = (c) => (c.i ? { inline_message_id: c.i } : { chat_id: c.c, messag
 async function onUpdate(env, origin, u) {
   if (u.inline_query) {
     const q = (u.inline_query.query || "").trim().toLowerCase();
-    const results = Object.entries(GAMES)
-      .filter(([short, title]) => !q || short.includes(q) || title.toLowerCase().includes(q))
-      .map(([short]) => ({
-        type: "game",
-        id: short,
-        game_short_name: short,
-        reply_markup: playMarkup(short),
-      }));
-    await tg(env, "answerInlineQuery", {
-      inline_query_id: u.inline_query.id,
-      results,
-      cache_time: 5,
-    });
+    const all = Object.keys(GAMES);
+    for (let n = all.length; n > 0; n--) {
+      const results = all
+        .slice(0, n)
+        .filter((short) => !q || short.includes(q) || GAMES[short].toLowerCase().includes(q))
+        .map((short) => ({
+          type: "game",
+          id: short,
+          game_short_name: short,
+          reply_markup: playMarkup(short),
+        }));
+      const r = await tg(env, "answerInlineQuery", {
+        inline_query_id: u.inline_query.id,
+        results,
+        cache_time: 5,
+      });
+      if (r.ok) break;
+    }
     return;
   }
 

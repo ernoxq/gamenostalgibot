@@ -1,0 +1,212 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Snow Zigzag</title>
+<style>
+  html,body{margin:0;height:100%;background:#eaf4fb;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="/common.js"></script>
+<script>
+// A snowball rolls downhill between two fences. Tap to change direction.
+// +1 for every corner you pass, +2 for every star.
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+let W, H, s, last = 0;
+const R = 11;          // snowball radius
+const HW = 54;         // corridor half-width (horizontal)
+const D = Math.SQRT1_2;
+
+function fit() {
+  const r = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * r; cv.height = H * r;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  g.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener("resize", fit); fit();
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+const centre = (seg, y) => seg.x0 + seg.d * (y - seg.y0);
+const segAt = (y) => s.segs.find((q) => y >= q.y0 && y < q.y1) || s.segs[s.segs.length - 1];
+
+function addSegment() {
+  const prev = s.segs[s.segs.length - 1];
+  const x0 = centre(prev, prev.y1), d = -prev.d, margin = HW + 12;
+  const room = d > 0 ? W - margin - x0 : x0 - margin;
+  const shorter = Math.min(1, s.t / 60);                 // corners come faster over time
+  const len = Math.max(46, Math.min(room, rnd(110 - 40 * shorter, 280 - 120 * shorter)));
+  const seg = { y0: prev.y1, y1: prev.y1 + len, x0, d, passed: false };
+  s.segs.push(seg);
+
+  if (len > 70 && Math.random() < 0.65) {
+    const y = seg.y0 + len * rnd(0.35, 0.75);
+    s.stars.push({ x: centre(seg, y) + rnd(-HW * 0.45, HW * 0.45), y, got: false });
+  }
+  for (let i = 0; i < 2; i++) {
+    const y = rnd(seg.y0, seg.y1), x = rnd(10, W - 10);
+    // keep trees well away from the track, including the neighbouring corners
+    const clear = [prev, seg].every((q) => Math.abs(x - centre(q, Math.max(q.y0, Math.min(q.y1, y)))) > HW + 46);
+    if (clear) s.trees.push({ x, y, k: rnd(0.8, 1.25) });
+  }
+}
+
+function reset() {
+  // The first stretch runs straight through the start point, so nothing happens until the first corner.
+  const firstEnd = Math.max(40, Math.min(120, W / 2 - HW - 14));
+  s = {
+    x: W / 2, y: 0, dir: 1, t: 0, score: 0, started: false, over: false,
+    segs: [{ y0: -500, y1: firstEnd, x0: W / 2 - 500, d: 1, passed: false }],
+    stars: [], trees: [], trail: [{ x: W / 2, y: 0 }], puffs: [],
+  };
+  while (s.segs[s.segs.length - 1].y1 < H * 1.5) addSegment();
+}
+
+function puff(x, y, n, spread) {
+  for (let i = 0; i < n; i++) {
+    s.puffs.push({ x, y, vx: rnd(-spread, spread), vy: rnd(-spread, spread * 0.3), r: rnd(3, 7), life: rnd(0.3, 0.6) });
+  }
+}
+
+addEventListener("pointerdown", () => {
+  if (!s || s.over) return;
+  if (!s.started) { s.started = true; return; }
+  s.dir = -s.dir;
+  s.trail.push({ x: s.x, y: s.y });
+  puff(s.x, s.y, 4, 40);
+});
+
+function step(dt) {
+  for (const p of s.puffs) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+  s.puffs = s.puffs.filter((p) => p.life > 0);
+  if (!s.started || s.over) return;
+
+  s.t += dt;
+  const v = Math.min(430, 230 + s.t * 5);
+  s.x += s.dir * v * D * dt;
+  s.y += v * D * dt;
+
+  while (s.segs[s.segs.length - 1].y1 < s.y + H * 1.5) addSegment();
+
+  const seg = segAt(s.y);
+  for (const q of s.segs) {
+    if (!q.passed && s.y > q.y1) { q.passed = true; s.score++; }
+  }
+  for (const st of s.stars) {
+    if (!st.got && Math.hypot(st.x - s.x, st.y - s.y) < R + 15) { st.got = true; s.score += 2; puff(st.x, st.y, 6, 70); }
+  }
+  if (Math.abs(s.x - centre(seg, s.y)) > HW - R * 0.8) {
+    s.over = true;
+    puff(s.x, s.y, 16, 140);
+    gameOver(s.score, reset);
+  }
+
+  const top = s.y - H;
+  s.segs = s.segs.filter((q) => q.y1 > top);
+  s.stars = s.stars.filter((q) => q.y > top);
+  s.trees = s.trees.filter((q) => q.y > top);
+  if (s.trail.length > 40) s.trail.shift();
+}
+
+function fence(seg, side, cam) {
+  const xa = centre(seg, seg.y0) + side * HW, xb = centre(seg, seg.y1) + side * HW;
+  const ya = seg.y0 - cam, yb = seg.y1 - cam;
+  if (yb < -30 || ya > H + 30) return;
+  g.lineCap = "round";
+  g.strokeStyle = "rgba(150,175,205,.45)"; g.lineWidth = 5;
+  g.beginPath(); g.moveTo(xa, ya + 4); g.lineTo(xb, yb + 4); g.stroke();
+  g.strokeStyle = "#7a5a3c"; g.lineWidth = 2.5;
+  for (const lift of [5, 11]) {
+    g.beginPath(); g.moveTo(xa, ya - lift); g.lineTo(xb, yb - lift); g.stroke();
+  }
+  const len = Math.hypot(xb - xa, yb - ya), n = Math.max(1, Math.round(len / 18));
+  g.strokeStyle = "#5c4129"; g.lineWidth = 3;
+  for (let i = 0; i <= n; i++) {
+    const x = xa + (xb - xa) * i / n, y = ya + (yb - ya) * i / n;
+    g.beginPath(); g.moveTo(x, y + 1); g.lineTo(x, y - 14); g.stroke();
+  }
+}
+
+function tree(x, y, k) {
+  g.fillStyle = "rgba(150,175,205,.4)";
+  g.beginPath(); g.ellipse(x + 6 * k, y + 2, 20 * k, 6 * k, 0, 0, 6.2832); g.fill();
+  g.fillStyle = "#6b5a4a"; g.fillRect(x - 3 * k, y - 8 * k, 6 * k, 9 * k);
+  const tiers = [[22, 8, 30], [17, 24, 26], [12, 40, 22]];
+  for (const [half, base, h] of tiers) {
+    g.fillStyle = "#b9c8de";
+    g.beginPath(); g.moveTo(x - half * k, y - base * k); g.lineTo(x + half * k, y - base * k); g.lineTo(x, y - (base + h) * k); g.fill();
+    g.fillStyle = "#e9f0f9";
+    g.beginPath(); g.moveTo(x - half * k, y - base * k); g.lineTo(x, y - base * k); g.lineTo(x, y - (base + h) * k); g.fill();
+  }
+}
+
+function star(x, y, r, t) {
+  g.fillStyle = "rgba(150,175,205,.45)";
+  g.beginPath(); g.ellipse(x, y + r + 5, r * 0.7, 3, 0, 0, 6.2832); g.fill();
+  const bob = Math.sin(t * 4 + x) * 2;
+  g.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * 0.48 : r;
+    g.lineTo(x + Math.cos(a) * q, y + bob + Math.sin(a) * q);
+  }
+  g.closePath();
+  g.fillStyle = "#ffb703"; g.fill();
+  g.strokeStyle = "#e08a00"; g.lineWidth = 2; g.stroke();
+}
+
+function draw() {
+  const cam = s.y - H * 0.3;
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#f7fbfe"); bg.addColorStop(1, "#d7ecf8");
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+
+  // track left in the snow
+  g.strokeStyle = "rgba(140,170,225,.55)"; g.lineWidth = 9; g.lineJoin = "round"; g.lineCap = "round";
+  g.beginPath();
+  s.trail.forEach((p, i) => (i ? g.lineTo(p.x, p.y - cam) : g.moveTo(p.x, p.y - cam)));
+  g.lineTo(s.x, s.y - cam); g.stroke();
+  g.strokeStyle = "rgba(255,255,255,.7)"; g.lineWidth = 3; g.stroke();
+
+  for (const st of s.stars) if (!st.got) star(st.x, st.y - cam, 13, s.t);
+  for (const q of s.segs) { fence(q, -1, cam); fence(q, 1, cam); }
+  for (const tr of s.trees) tree(tr.x, tr.y - cam, tr.k);
+
+  if (!s.over) {
+    const py = s.y - cam;
+    g.fillStyle = "rgba(150,175,205,.5)";
+    g.beginPath(); g.ellipse(s.x + 3, py + R * 0.8, R, R * 0.45, 0, 0, 6.2832); g.fill();
+    g.fillStyle = "#ffffff"; g.strokeStyle = "#b9c8de"; g.lineWidth = 2;
+    g.beginPath(); g.arc(s.x, py, R, 0, 6.2832); g.fill(); g.stroke();
+  }
+  for (const p of s.puffs) {
+    g.globalAlpha = Math.min(1, p.life * 2.5);
+    g.fillStyle = "#ffffff"; g.strokeStyle = "#c5d3e6"; g.lineWidth = 1;
+    g.beginPath(); g.arc(p.x, p.y - cam, p.r, 0, 6.2832); g.fill(); g.stroke();
+  }
+  g.globalAlpha = 1;
+
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "#34506e"; g.font = "800 40px system-ui,sans-serif";
+  g.fillText(s.score, W / 2, 58);
+  if (!s.started) {
+    g.font = "700 20px system-ui,sans-serif";
+    g.fillText("Tap to start", W / 2, H * 0.62);
+    g.font = "500 15px system-ui,sans-serif";
+    g.fillText("Tap to turn. Stay between the fences.", W / 2, H * 0.62 + 28);
+  }
+}
+
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  step(dt); draw();
+  requestAnimationFrame(frame);
+}
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

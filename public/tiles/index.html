@@ -1,0 +1,196 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Tile Dash</title>
+<style>
+  html,body{margin:0;height:100%;background:#dcdcdc;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="/common.js"></script>
+<script>
+// A cube slides along a three-lane track. Tap the left or right side of the
+// screen to change lane. Avoid the red blocks and the missing tiles.
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+let W, H, s, last = 0;
+const FAR = 20, K = 0.2, TILE = 0, BLOCK = 1, HOLE = 2, CUBE = 0.5, BLOCK_H = 0.95;
+
+function fit() {
+  const r = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * r; cv.height = H * r;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  g.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener("resize", fit); fit();
+
+const horizon = () => H * 0.15;
+const baseY = () => H * 0.7;
+const unit = () => Math.min(W * 0.27, H * 0.17);      // lane width in px at the player
+const P = (d) => 1 / (1 + Math.max(d, -1.6) * K);
+const SX = (x, d) => W / 2 + x * unit() * P(d);
+const SY = (d, h) => horizon() + (baseY() - horizon()) * P(d) - (h || 0) * unit() * P(d);
+
+const shards = Array.from({ length: 26 }, (_, i) => ({
+  x: Math.random(), y: Math.random() * 0.75, w: 0.12 + Math.random() * 0.22, c: 205 + Math.floor(Math.random() * 30), f: i % 2,
+}));
+
+function addRow() {
+  const z = s.rows.length ? s.rows[s.rows.length - 1].z + 1 : -3;
+  const row = { z, cells: [TILE, TILE, TILE], scored: true };
+  if (z >= 9) {
+    if (s.repeat) {                         // second half of a long wall
+      row.cells = s.repeat.slice(); s.repeat = null;
+    } else if (--s.untilNext <= 0) {
+      s.untilNext = z > 120 ? 3 : 4;
+      s.safe = Math.max(0, Math.min(2, s.safe + [-1, 0, 1][Math.floor(Math.random() * 3)]));
+      let any = false;
+      for (let l = 0; l < 3; l++) {
+        if (l === s.safe || Math.random() > 0.72) continue;
+        row.cells[l] = Math.random() < 0.62 ? BLOCK : HOLE; any = true;
+      }
+      if (!any) row.cells[(s.safe + 1 + Math.floor(Math.random() * 2)) % 3] = BLOCK;
+      row.scored = false;
+      if (Math.random() < 0.3) { s.repeat = row.cells.slice(); s.untilNext++; }
+    }
+  }
+  s.rows.push(row);
+}
+
+function reset() {
+  s = { z: 0, x: 0, lane: 1, v: 4.2, t: 0, score: 0, started: false, over: false, fall: 0,
+        rows: [], safe: 1, untilNext: 1, repeat: null, shake: 0 };
+  while (s.rows.length < FAR + 6) addRow();
+}
+
+addEventListener("pointerdown", (e) => {
+  if (!s || s.over) return;
+  if (!s.started) { s.started = true; return; }
+  s.lane = Math.max(0, Math.min(2, s.lane + (e.clientX < W / 2 ? -1 : 1)));
+});
+
+function crash(fell) {
+  s.over = true; s.shake = 0.3; s.fall = fell ? 0.001 : 0;
+  gameOver(s.score, reset);
+}
+
+function step(dt) {
+  if (s.shake > 0) s.shake -= dt;
+  if (s.fall > 0) s.fall += dt * 3;
+  if (!s.started || s.over) return;
+
+  s.t += dt;
+  s.v = Math.min(9.5, 4.2 + s.t * 0.085);
+  s.z += s.v * dt;
+  const target = s.lane - 1;
+  s.x += Math.max(-11 * dt, Math.min(11 * dt, target - s.x));
+
+  while (s.rows[s.rows.length - 1].z < s.z + FAR) addRow();
+  s.rows = s.rows.filter((r) => r.z > s.z - 4);
+
+  for (const r of s.rows) {
+    if (!r.scored && r.z + 1 < s.z) { r.scored = true; s.score++; }
+    const overlap = r.z < s.z + CUBE && r.z + 1 > s.z;
+    if (!overlap) continue;
+    for (let l = 0; l < 3; l++) {
+      const dx = Math.abs(s.x - (l - 1));
+      if (r.cells[l] === BLOCK && dx < 0.5 + CUBE / 2 - 0.1) return crash(false);
+    }
+    const mid = s.z + CUBE / 2, under = Math.round(s.x) + 1;
+    if (mid > r.z && mid < r.z + 1 && r.cells[under] === HOLE && Math.abs(s.x - Math.round(s.x)) < 0.3) return crash(true);
+  }
+}
+
+function quad(pts, fill) {
+  g.fillStyle = fill; g.beginPath();
+  pts.forEach((p, i) => (i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])));
+  g.closePath(); g.fill();
+}
+
+// Box standing on the track: x range [x1,x2], depth range [d1,d2], height h.
+function box(x1, x2, d1, d2, h, top, front, side) {
+  d1 = Math.max(d1, -1.5);
+  if (d2 <= d1) return;
+  if (x2 < 0) quad([[SX(x2, d1), SY(d1)], [SX(x2, d2), SY(d2)], [SX(x2, d2), SY(d2, h)], [SX(x2, d1), SY(d1, h)]], side);
+  if (x1 > 0) quad([[SX(x1, d1), SY(d1)], [SX(x1, d2), SY(d2)], [SX(x1, d2), SY(d2, h)], [SX(x1, d1), SY(d1, h)]], side);
+  quad([[SX(x1, d1), SY(d1, h)], [SX(x2, d1), SY(d1, h)], [SX(x2, d2), SY(d2, h)], [SX(x1, d2), SY(d2, h)]], top);
+  quad([[SX(x1, d1), SY(d1)], [SX(x2, d1), SY(d1)], [SX(x2, d1), SY(d1, h)], [SX(x1, d1), SY(d1, h)]], front);
+}
+
+function drawRow(r) {
+  const d = r.z - s.z, near = Math.max(d, -1.5), far = d + 1;
+  if (far <= -1.5) return;
+  g.globalAlpha = Math.max(0, Math.min(1, (FAR - d) / 5));
+  for (let l = 0; l < 3; l++) {
+    if (r.cells[l] === HOLE) continue;
+    const x1 = l - 1.5 + 0.03, x2 = l - 0.5 - 0.03, fd = far - 0.04;
+    quad([[SX(x1, near), SY(near)], [SX(x2, near), SY(near)], [SX(x2, fd), SY(fd)], [SX(x1, fd), SY(fd)]],
+         (r.z + l) & 1 ? "#5d6a8f" : "#66749c");
+    // front edge gives the tiles some thickness
+    if (near === d) quad([[SX(x1, near), SY(near)], [SX(x2, near), SY(near)], [SX(x2, near), SY(near, -0.12)], [SX(x1, near), SY(near, -0.12)]], "#434d6b");
+  }
+  for (const l of [0, 2, 1]) {
+    if (r.cells[l] === BLOCK) box(l - 1.5 + 0.03, l - 0.5 - 0.03, d, far - 0.04, BLOCK_H, "#ee3d63", "#cf2450", "#a81a40");
+  }
+  g.globalAlpha = 1;
+}
+
+function drawPlayer() {
+  const drop = s.fall * s.fall * 1.6;
+  if (drop > 3) return;
+  g.save();
+  g.translate(0, drop * unit());
+  if (!s.fall) {
+    g.fillStyle = "rgba(20,25,45,.25)";
+    g.beginPath(); g.ellipse(SX(s.x, 0.2), SY(0.2), unit() * 0.36, unit() * 0.09, 0, 0, 6.2832); g.fill();
+  }
+  box(s.x - CUBE / 2, s.x + CUBE / 2, 0, CUBE, CUBE, "#ffffff", "#e6e9f2", "#c4c9d8");
+  g.restore();
+}
+
+function draw() {
+  g.save();
+  if (s.shake > 0) g.translate((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#efefef"); bg.addColorStop(1, "#cfcfcf");
+  g.fillStyle = bg; g.fillRect(-20, -20, W + 40, H + 40);
+  for (const q of shards) {
+    g.fillStyle = `rgb(${q.c},${q.c},${q.c})`;
+    g.beginPath();
+    g.moveTo(q.x * W, q.y * H); g.lineTo((q.x + q.w) * W, (q.y + (q.f ? 0.05 : 0.2)) * H); g.lineTo((q.x + q.w * 0.3) * W, (q.y + 0.3) * H);
+    g.fill();
+  }
+
+  const rows = s.rows.slice().sort((a, b) => b.z - a.z);
+  const behind = rows.filter((r) => r.z + 1 > s.z + CUBE * 0.5);
+  const front = rows.filter((r) => r.z + 1 <= s.z + CUBE * 0.5);
+  if (s.fall) { drawPlayer(); behind.forEach(drawRow); }
+  else { behind.forEach(drawRow); drawPlayer(); }
+  front.forEach(drawRow);
+  g.restore();
+
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "#ffffff"; g.strokeStyle = "rgba(60,70,100,.55)"; g.lineWidth = 5; g.lineJoin = "round";
+  g.font = "800 48px system-ui,sans-serif";
+  g.strokeText(s.score, W / 2, 62); g.fillText(s.score, W / 2, 62);
+  if (!s.started) {
+    g.fillStyle = "#3d4666";
+    g.font = "700 20px system-ui,sans-serif"; g.fillText("Tap to start", W / 2, H * 0.9);
+    g.font = "500 15px system-ui,sans-serif"; g.fillText("Tap left or right to change lane", W / 2, H * 0.9 + 26);
+  }
+}
+
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  step(dt); draw();
+  requestAnimationFrame(frame);
+}
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
