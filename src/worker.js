@@ -180,8 +180,15 @@ export default {
         if (fine(r2)) r = r2;
       }
       if (!fine(r)) {
-        const where = ctx.i ? `inline id, ${ctx.i.length} chars` : `chat ${ctx.c}, message ${ctx.m}`;
-        return json({ ok: false, error: `${r.description || "Telegram refused the score"} (${where})` });
+        // Probe the same message two other ways, to tell a broken id from a broken score call.
+        const short = (x) => (x.ok ? "ok" : (x.description || "?").replace("Bad Request: ", ""));
+        const edit = await tg(env, "editMessageReplyMarkup", { ...target(ctx), reply_markup: playMarkup(ctx.g) });
+        const high = await tg(env, "getGameHighScores", { user_id: ctx.u, ...target(ctx) });
+        const where = ctx.i ? `inline ${ctx.i.length}` : `chat ${ctx.c}/${ctx.m}`;
+        return json({
+          ok: false,
+          error: `${short(r)} [${where}; edit: ${short(edit)}; scores: ${short(high)}]`,
+        });
       }
       return json({ ok: true, improved: !!r.ok });
     }
