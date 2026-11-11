@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Roof Runner</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d1021;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="/common.js"></script>
+<script>
+// Tap to jump, tap again in the air for a double jump.
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+let W, H, s, last = 0;
+const SIZE = 34;
+
+function fit() {
+  const r = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * r; cv.height = H * r;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  g.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener("resize", fit); fit();
+
+function reset() {
+  s = { y: 0, vy: 0, jumps: 2, obs: [], dist: 0, t: 0, gap: 500, over: false };
+}
+
+addEventListener("pointerdown", () => {
+  if (!s || s.over || s.jumps <= 0) return;
+  s.vy = s.jumps === 2 ? -780 : -680;
+  s.jumps--;
+});
+
+function step(dt) {
+  s.t += dt;
+  const speed = Math.min(800, 300 + s.t * 8);
+  s.dist += speed * dt;
+
+  s.vy += 2200 * dt;
+  s.y += s.vy * dt;
+  if (s.y >= 0) { s.y = 0; s.vy = 0; s.jumps = 2; }
+
+  s.gap -= speed * dt;
+  if (s.gap <= 0) {
+    s.gap = 230 + Math.random() * 220 + speed * 0.3;
+    s.obs.push({ x: W + 40, w: 24 + Math.random() * 18, h: 30 + Math.random() * 42 });
+  }
+
+  const px = W * 0.2, pad = 5;
+  for (const o of s.obs) {
+    o.x -= speed * dt;
+    const hitX = px + SIZE - pad > o.x && px + pad < o.x + o.w;
+    const hitY = -s.y < o.h - pad; // player's bottom is below the obstacle's top
+    if (hitX && hitY) s.over = true;
+  }
+  s.obs = s.obs.filter((o) => o.x + o.w > -10);
+}
+
+function draw() {
+  const ground = H * 0.72, px = W * 0.2;
+  g.fillStyle = "#0d1021"; g.fillRect(0, 0, W, H);
+
+  // far skyline
+  g.fillStyle = "#171b36";
+  for (let i = 0; i < 12; i++) {
+    const bw = 70, x = ((i * bw * 1.4 - s.dist * 0.15) % (bw * 1.4 * 12) + bw * 1.4 * 12) % (bw * 1.4 * 12) - bw;
+    const bh = 60 + ((i * 53) % 110);
+    g.fillRect(x, ground - bh, bw, bh);
+  }
+
+  g.fillStyle = "#1f2547"; g.fillRect(0, ground, W, H - ground);
+  g.fillStyle = "#5ef2ff"; g.fillRect(0, ground, W, 3);
+
+  g.fillStyle = "#ff4d6d";
+  for (const o of s.obs) g.fillRect(o.x, ground - o.h, o.w, o.h);
+
+  g.fillStyle = "#ffb703";
+  g.fillRect(px, ground - SIZE + s.y, SIZE, SIZE);
+  g.fillStyle = "#0d1021";
+  g.fillRect(px + SIZE - 12, ground - SIZE + s.y + 8, 6, 6);
+
+  g.fillStyle = "#ffffff"; g.font = "800 34px system-ui,sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(Math.floor(s.dist / 10), W / 2, 54);
+}
+
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  if (!s.over) {
+    step(dt);
+    if (s.over) gameOver(Math.floor(s.dist / 10), reset);
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

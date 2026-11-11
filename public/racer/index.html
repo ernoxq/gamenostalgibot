@@ -1,0 +1,201 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Grid Racer</title>
+<style>
+  html,body{margin:0;height:100%;background:#3b2fd6;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="/common.js"></script>
+<script>
+// Drag left/right to steer. Speed keeps growing. Don't hit the other cars.
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+let W, H, s, last = 0;
+
+const FAR = 14;            // how far ahead we draw, in road units
+const BAND = 0.5;          // length of one road stripe
+const LANES = [-0.55, 0, 0.55];
+const CAR_COLORS = ["#ff9f1c", "#3a86ff", "#d63af9", "#2ec4b6", "#f9f871"];
+const TRAFFIC_SPEED = 3;
+
+function fit() {
+  const r = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * r; cv.height = H * r;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  g.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener("resize", fit); fit();
+
+// Perspective: d = distance ahead of the player (0 = player, FAR = horizon side).
+const horizon = () => H * 0.3;
+const baseY = () => H * 0.8;
+const halfRoad = () => W * 0.62;
+const P = (d) => 1 / (1 + d * 0.9);
+const Y = (d) => horizon() + (baseY() - horizon()) * P(d);
+
+function reset() {
+  s = { x: 0, v: 0, pos: 0, t: 0, count: 1.8, cars: [], spawn: 1.2, over: false, shake: 0 };
+}
+
+function steer(e) {
+  if (!s || s.over) return;
+  s.x = Math.max(-0.78, Math.min(0.78, (e.clientX - W / 2) / halfRoad()));
+}
+addEventListener("pointerdown", steer);
+addEventListener("pointermove", steer);
+
+function step(dt) {
+  if (s.count > 0) { s.count -= dt; return; }
+  s.t += dt;
+  const vmax = Math.min(17, 7 + s.t * 0.16);
+  s.v = Math.min(vmax, s.v + 6 * dt);
+  s.pos += s.v * dt;
+
+  s.spawn -= dt;
+  if (s.spawn <= 0) {
+    s.spawn = Math.max(0.5, 1.15 - s.t * 0.009);
+    const a = Math.floor(Math.random() * 3);
+    const add = (lane) => s.cars.push({
+      lane, d: FAR, c: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+    });
+    add(a);
+    // Sometimes two cars side by side — one lane is always left free.
+    if (s.t > 15 && Math.random() < 0.3) add((a + 1 + Math.floor(Math.random() * 2)) % 3);
+  }
+
+  const rel = s.v - TRAFFIC_SPEED;
+  for (const c of s.cars) {
+    c.d -= rel * dt;
+    if (Math.abs(c.d) < 0.16 && Math.abs(LANES[c.lane] - s.x) < 0.36) { s.over = true; s.shake = 0.35; }
+  }
+  s.cars = s.cars.filter((c) => c.d > -0.75);
+}
+
+function quad(x1, y1, x2, y2, x3, y3, x4, y4, color) {
+  g.fillStyle = color;
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.lineTo(x3, y3); g.lineTo(x4, y4);
+  g.closePath(); g.fill();
+}
+
+function drawRoad() {
+  const cx = W / 2, hr = halfRoad();
+  g.fillStyle = "#0b7a0b"; g.fillRect(0, horizon(), W, H - horizon());
+  // Stripes are tied to the world, so they scroll toward the player.
+  let d0 = Math.floor(s.pos / BAND) * BAND - s.pos - BAND;
+  for (let d = d0; d < FAR; d += BAND) {
+    const near = Math.max(d, -0.7), far = d + BAND;
+    if (far <= -0.7) continue;
+    const odd = Math.round((d + s.pos) / BAND) & 1;
+    const y1 = Y(near), y2 = Y(far), w1 = hr * P(near), w2 = hr * P(far);
+
+    g.fillStyle = odd ? "#0b7a0b" : "#0d8f0d";
+    g.fillRect(0, y2 - 0.5, W, y1 - y2 + 1);
+    // kerbs
+    const k = 1.09;
+    quad(cx - w1 * k, y1, cx + w1 * k, y1, cx + w2 * k, y2, cx - w2 * k, y2, odd ? "#f1f1f1" : "#f05a28");
+    // asphalt
+    quad(cx - w1, y1, cx + w1, y1, cx + w2, y2, cx - w2, y2, odd ? "#8a8a8a" : "#828282");
+    // centre dashes
+    if (odd) {
+      const m = 0.035;
+      quad(cx - w1 * m, y1, cx + w1 * m, y1, cx + w2 * m, y2, cx - w2 * m, y2, "#ececec");
+    }
+  }
+}
+
+// Rear view of a simple open-wheel car, drawn from flat shapes.
+function drawCar(cx, by, w, color) {
+  const h = w * 0.5, tw = w * 0.25, th = h * 0.62;
+  g.fillStyle = "rgba(0,0,0,.25)";
+  g.fillRect(cx - w * 0.5, by - h * 0.06, w, h * 0.12);
+  g.fillStyle = "#232323";
+  g.fillRect(cx - w * 0.5, by - th, tw, th);
+  g.fillRect(cx + w * 0.5 - tw, by - th, tw, th);
+  g.fillStyle = "#3a3a3a";
+  g.fillRect(cx - w * 0.5 + tw * 0.2, by - th, tw * 0.25, th);
+  g.fillRect(cx + w * 0.5 - tw * 0.45, by - th, tw * 0.25, th);
+  g.fillStyle = "#4a4a4a";
+  g.fillRect(cx - w * 0.27, by - h * 0.42, w * 0.54, h * 0.12);
+  g.fillStyle = color;
+  g.fillRect(cx - w * 0.17, by - h * 0.72, w * 0.34, h * 0.62);
+  g.fillStyle = "#1c1c1c";
+  g.fillRect(cx - w * 0.07, by - h * 0.36, w * 0.14, h * 0.22);
+  g.fillStyle = color;
+  g.fillRect(cx - w * 0.34, by - h * 0.96, w * 0.68, h * 0.2);
+  g.fillStyle = "#ffffff";
+  g.fillRect(cx - w * 0.28, by - h * 0.9, w * 0.56, h * 0.07);
+  g.fillStyle = "#1c1c1c";
+  g.fillRect(cx - w * 0.36, by - h, w * 0.04, h * 0.3);
+  g.fillRect(cx + w * 0.32, by - h, w * 0.04, h * 0.3);
+  g.fillStyle = "#ffd60a";
+  g.beginPath(); g.arc(cx, by - h * 1.02, w * 0.07, 0, 6.2832); g.fill();
+}
+
+function drawSky() {
+  const hz = horizon() + 2;
+  const grd = g.createLinearGradient(0, 0, 0, hz);
+  grd.addColorStop(0, "#3b2fd6"); grd.addColorStop(1, "#6ea8ff");
+  g.fillStyle = grd; g.fillRect(0, 0, W, hz);
+  // skyline
+  for (let i = 0; i < 16; i++) {
+    const bw = W / 14, bh = 18 + ((i * 37) % 46);
+    g.fillStyle = i % 3 ? "#e9b949" : "#b8862f";
+    g.fillRect(i * bw - bw * 0.5, hz - bh, bw * 0.86, bh);
+  }
+}
+
+function drawHud() {
+  g.textBaseline = "middle";
+  g.textAlign = "right"; g.fillStyle = "#ffffff";
+  g.font = "800 22px system-ui,sans-serif";
+  g.fillText(Math.round(s.v * 20) + " km/h", W - 16, 34);
+  g.textAlign = "left";
+  g.fillText(Math.floor(s.pos * 5), 16, 34);
+
+  if (s.count > 0) {
+    const lit = 3 - Math.ceil(s.count / 0.6);
+    const r = 13, gap = 38, x0 = W / 2 - gap, y = H * 0.16;
+    g.fillStyle = "#111"; g.fillRect(x0 - 26, y - 22, gap * 2 + 52, 44);
+    for (let i = 0; i < 3; i++) {
+      g.fillStyle = i <= lit ? "#ff2d2d" : "#4a1b1b";
+      g.beginPath(); g.arc(x0 + i * gap, y, r, 0, 6.2832); g.fill();
+    }
+  }
+}
+
+function draw() {
+  g.save();
+  if (s.shake > 0) g.translate((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
+  drawSky();
+  drawRoad();
+  const cx = W / 2, hr = halfRoad(), cw = 0.4;
+  const far = s.cars.filter((c) => c.d >= 0).sort((a, b) => b.d - a.d);
+  const passed = s.cars.filter((c) => c.d < 0);
+  for (const c of far) drawCar(cx + LANES[c.lane] * hr * P(c.d), Y(c.d), cw * hr * P(c.d), c.c);
+  drawCar(cx + s.x * hr, baseY(), cw * hr, "#e5383b");
+  for (const c of passed) drawCar(cx + LANES[c.lane] * hr * P(c.d), Y(c.d), cw * hr * P(c.d), c.c);
+  g.restore();
+  drawHud();
+}
+
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  if (s.shake > 0) s.shake -= dt;
+  if (!s.over) {
+    step(dt);
+    if (s.over) gameOver(Math.floor(s.pos * 5), reset);
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

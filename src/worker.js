@@ -1,0 +1,177 @@
+// Telegram game bot: inline games with per-chat high scores.
+// Short names must match the ones registered in @BotFather via /newgame,
+// and each game lives in public/<short_name>/index.html.
+// Only list games that are already registered in BotFather: one unregistered
+// short name makes Telegram reject the whole inline list.
+const GAMES = {
+  racer: "Grid Racer",
+  // cannon: "Star Cannon",
+  // runner: "Roof Runner",
+};
+
+const enc = new TextEncoder();
+
+const json = (obj, status = 200) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+
+async function tg(env, method, body) {
+  const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+function b64u(str) {
+  let bin = "";
+  for (const b of enc.encode(str)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function unb64u(s) {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+
+async function sign(env, data) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(env.BOT_TOKEN),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(data));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The game page gets a signed context (who is playing, in which message).
+// Only a context signed by us is accepted back on /score and /scores.
+async function readCtx(env, body) {
+  if (!body || typeof body.d !== "string" || typeof body.s !== "string") return null;
+  if ((await sign(env, body.d)) !== body.s) return null;
+  try {
+    return JSON.parse(unb64u(body.d));
+  } catch {
+    return null;
+  }
+}
+
+const target = (c) => (c.i ? { inline_message_id: c.i } : { chat_id: c.c, message_id: c.m });
+
+async function onUpdate(env, origin, u) {
+  if (u.inline_query) {
+    const q = (u.inline_query.query || "").trim().toLowerCase();
+    const results = Object.entries(GAMES)
+      .filter(([short, title]) => !q || short.includes(q) || title.toLowerCase().includes(q))
+      .map(([short]) => ({ type: "game", id: short, game_short_name: short }));
+    await tg(env, "answerInlineQuery", {
+      inline_query_id: u.inline_query.id,
+      results,
+      cache_time: 60,
+    });
+    return;
+  }
+
+  if (u.callback_query) {
+    const cq = u.callback_query;
+    const g = cq.game_short_name;
+    if (!g || !GAMES[g]) {
+      await tg(env, "answerCallbackQuery", { callback_query_id: cq.id });
+      return;
+    }
+    const ctx = { u: cq.from.id, g };
+    if (cq.inline_message_id) ctx.i = cq.inline_message_id;
+    else if (cq.message) {
+      ctx.c = cq.message.chat.id;
+      ctx.m = cq.message.message_id;
+    }
+    const d = b64u(JSON.stringify(ctx));
+    const s = await sign(env, d);
+    await tg(env, "answerCallbackQuery", {
+      callback_query_id: cq.id,
+      url: `${origin}/${g}/?d=${d}&s=${s}`,
+    });
+    return;
+  }
+
+  // /games (or /play) in a group where the bot is a member: post every game card there.
+  if (u.message && /^\/(games|play)(@\w+)?(\s|$)/.test(u.message.text || "")) {
+    for (const short of Object.keys(GAMES)) {
+      await tg(env, "sendGame", { chat_id: u.message.chat.id, game_short_name: short });
+    }
+    return;
+  }
+
+  if (u.message && u.message.chat && u.message.chat.type === "private") {
+    await tg(env, "sendMessage", {
+      chat_id: u.message.chat.id,
+      text: "Выбери чат — и отправь туда игру. Рекорды считаются отдельно в каждом чате.",
+      reply_markup: {
+        inline_keyboard: [[{ text: "Выбрать чат", switch_inline_query: "" }]],
+      },
+    });
+  }
+}
+
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+
+    if (url.pathname === "/webhook" && req.method === "POST") {
+      if (req.headers.get("x-telegram-bot-api-secret-token") !== env.WEBHOOK_SECRET) {
+        return new Response("forbidden", { status: 403 });
+      }
+      try {
+        await onUpdate(env, url.origin, await req.json());
+      } catch (e) {
+        console.error(e);
+      }
+      return new Response("ok");
+    }
+
+    if (url.pathname === "/score" && req.method === "POST") {
+      const body = await req.json().catch(() => null);
+      const ctx = await readCtx(env, body);
+      const score = body && body.score;
+      if (!ctx || !Number.isInteger(score) || score < 0 || score > 1e9) {
+        return json({ ok: false }, 400);
+      }
+      // Without `force`, Telegram keeps the best score and ignores lower ones.
+      const r = await tg(env, "setGameScore", { user_id: ctx.u, score, ...target(ctx) });
+      return json({ ok: true, improved: !!r.ok });
+    }
+
+    if (url.pathname === "/scores" && req.method === "POST") {
+      const ctx = await readCtx(env, await req.json().catch(() => null));
+      if (!ctx) return json({ ok: false }, 400);
+      const r = await tg(env, "getGameHighScores", { user_id: ctx.u, ...target(ctx) });
+      const scores = (r.result || []).map((x) => ({
+        position: x.position,
+        name: x.user.first_name,
+        score: x.score,
+        me: x.user.id === ctx.u,
+      }));
+      return json({ ok: true, scores });
+    }
+
+    // One-time: open /setup?key=<WEBHOOK_SECRET> in a browser after deploy.
+    if (url.pathname === "/setup") {
+      if (url.searchParams.get("key") !== env.WEBHOOK_SECRET) {
+        return new Response("forbidden", { status: 403 });
+      }
+      const r = await tg(env, "setWebhook", {
+        url: `${url.origin}/webhook`,
+        secret_token: env.WEBHOOK_SECRET,
+        allowed_updates: ["message", "inline_query", "callback_query"],
+      });
+      return json(r);
+    }
+
+    return new Response("not found", { status: 404 });
+  },
+};

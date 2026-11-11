@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Star Cannon</title>
+<style>
+  html,body{margin:0;height:100%;background:#080818;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="/common.js"></script>
+<script>
+// Drag to move the cannon. It fires by itself. Don't let a block reach the line.
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+let W, H, s, last = 0;
+const COLORS = ["#ff4d6d", "#ffb703", "#5ef2ff", "#b388ff", "#7CFFB2"];
+
+function fit() {
+  const r = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * r; cv.height = H * r;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  g.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener("resize", fit); fit();
+
+const stars = Array.from({ length: 60 }, () => ({ x: Math.random(), y: Math.random(), z: Math.random() }));
+
+function reset() {
+  s = { px: W / 2, bullets: [], blocks: [], score: 0, t: 0, fire: 0, spawn: 0.4, over: false };
+}
+
+function move(e) { if (s && !s.over) s.px = Math.max(24, Math.min(W - 24, e.clientX)); }
+addEventListener("pointerdown", move);
+addEventListener("pointermove", move);
+
+function step(dt) {
+  s.t += dt;
+  const lineY = H - 90;
+
+  s.fire -= dt;
+  if (s.fire <= 0) {
+    s.fire = Math.max(0.07, 0.16 - s.t * 0.001);
+    s.bullets.push({ x: s.px, y: lineY - 20 });
+  }
+
+  s.spawn -= dt;
+  if (s.spawn <= 0) {
+    s.spawn = Math.max(0.45, 1.1 - s.t * 0.01);
+    const r = 22 + Math.random() * 16;
+    const hp = 1 + Math.ceil(Math.random() * (3 + s.t / 6));
+    s.blocks.push({
+      x: r + Math.random() * (W - 2 * r), y: -r, r, hp,
+      vy: Math.min(160, 50 + s.t * 1.2) * (0.8 + Math.random() * 0.4),
+      c: COLORS[Math.floor(Math.random() * COLORS.length)], hit: 0,
+    });
+  }
+
+  for (const b of s.bullets) b.y -= 720 * dt;
+  s.bullets = s.bullets.filter((b) => b.y > -10);
+
+  for (const k of s.blocks) {
+    k.y += k.vy * dt;
+    k.hit = Math.max(0, k.hit - dt);
+    for (const b of s.bullets) {
+      if (b.dead) continue;
+      const dx = b.x - k.x, dy = b.y - k.y;
+      if (dx * dx + dy * dy < k.r * k.r) {
+        b.dead = true; k.hp--; k.hit = 0.08; s.score++;
+      }
+    }
+    if (k.y + k.r >= lineY) s.over = true;
+  }
+  s.bullets = s.bullets.filter((b) => !b.dead);
+  s.blocks = s.blocks.filter((k) => k.hp > 0);
+}
+
+function draw() {
+  g.fillStyle = "#080818"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#ffffff";
+  for (const st of stars) {
+    g.globalAlpha = 0.2 + st.z * 0.5;
+    g.fillRect(st.x * W, ((st.y + s.t * 0.02 * (0.3 + st.z)) % 1) * H, 1.5, 1.5);
+  }
+  g.globalAlpha = 1;
+
+  const lineY = H - 90;
+  g.strokeStyle = "rgba(255,77,109,.35)"; g.setLineDash([6, 8]);
+  g.beginPath(); g.moveTo(0, lineY); g.lineTo(W, lineY); g.stroke(); g.setLineDash([]);
+
+  g.fillStyle = "#ffffff";
+  for (const b of s.bullets) g.fillRect(b.x - 2, b.y - 8, 4, 12);
+
+  g.textAlign = "center"; g.textBaseline = "middle";
+  for (const k of s.blocks) {
+    g.fillStyle = k.hit > 0 ? "#ffffff" : k.c;
+    g.beginPath(); g.arc(k.x, k.y, k.r, 0, 6.2832); g.fill();
+    g.fillStyle = "#080818"; g.font = "700 " + Math.round(k.r * 0.8) + "px system-ui,sans-serif";
+    g.fillText(k.hp, k.x, k.y + 1);
+  }
+
+  g.fillStyle = "#5ef2ff";
+  g.beginPath();
+  g.moveTo(s.px, lineY - 22); g.lineTo(s.px + 22, lineY + 18); g.lineTo(s.px - 22, lineY + 18);
+  g.closePath(); g.fill();
+
+  g.fillStyle = "#ffffff"; g.font = "800 34px system-ui,sans-serif";
+  g.fillText(s.score, W / 2, 54);
+}
+
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  if (!s.over) {
+    step(dt);
+    if (s.over) gameOver(s.score, reset);
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

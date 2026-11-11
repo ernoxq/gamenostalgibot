@@ -1,0 +1,7 @@
+name = "tg-games"
+main = "src/worker.js"
+compatibility_date = "2026-01-01"
+
+# Static game files. Anything not found here falls through to the worker.
+[assets]
+directory = "./public"
