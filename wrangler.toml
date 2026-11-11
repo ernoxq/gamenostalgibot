@@ -1,4 +1,4 @@
-name = "tg-games"
+name = "gamenostalgibot"
 main = "src/worker.js"
 compatibility_date = "2026-01-01"
 
